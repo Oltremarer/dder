@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import numpy as np
 
 
@@ -73,6 +75,71 @@ def selection_audit_row(
     )
     row["all_assertion_checks_pass"] = bool(_assertion_checks(row))
     return row
+
+
+def candidate_ratio_sweep_rows(
+    labels: np.ndarray,
+    scores: np.ndarray,
+    ratios: Iterable[float],
+    real_mask: np.ndarray | None = None,
+) -> list[dict[str, float | int]]:
+    labels = np.asarray(labels).astype(str)
+    scores = np.asarray(scores, dtype=np.float32)
+    if labels.shape[0] != scores.shape[0]:
+        raise ValueError("labels and scores must have the same length")
+    if real_mask is None:
+        real_mask = labels != "optional_invalid"
+    real_mask = np.asarray(real_mask, dtype=bool)
+    if real_mask.shape[0] != labels.shape[0]:
+        raise ValueError("real_mask must have the same length as labels")
+
+    real_indices = np.flatnonzero(real_mask)
+    real_labels = labels[real_indices]
+    real_scores = scores[real_indices]
+    sorted_real_indices = real_indices[np.argsort(-real_scores, kind="mergesort")]
+
+    real_transition_count = int(len(real_indices))
+    total_rare_useless = _count(real_labels, "rare_useless")
+    total_rare_valuable_all = _count_any(real_labels, RARE_VALUABLE)
+    total_zero_precursors = _count(real_labels, "rare_valuable_zero_precursor")
+    base_rare_useless_fraction = _safe_fraction(total_rare_useless, real_transition_count)
+
+    rows: list[dict[str, float | int]] = []
+    for ratio in ratios:
+        ratio = float(ratio)
+        if ratio <= 0 or ratio > 1:
+            raise ValueError("ratios must be in (0, 1]")
+        candidate_count = min(real_transition_count, max(1, int(np.ceil(real_transition_count * ratio))))
+        candidate_indices = sorted_real_indices[:candidate_count]
+        candidate_labels = labels[candidate_indices]
+        rare_valuable_positive = _count(candidate_labels, "rare_valuable_positive")
+        rare_valuable_zero = _count(candidate_labels, "rare_valuable_zero_precursor")
+        rare_valuable_all = _count_any(candidate_labels, RARE_VALUABLE)
+        rare_useless = _count(candidate_labels, "rare_useless")
+        common_zero = _count(candidate_labels, "common_zero")
+        optional_invalid = _count(candidate_labels, "optional_invalid")
+        valuable_precision = _safe_fraction(rare_valuable_all, candidate_count)
+        rare_useless_fraction = _safe_fraction(rare_useless, candidate_count)
+        row: dict[str, float | int] = {
+            "ratio": ratio,
+            "real_transition_count": real_transition_count,
+            "candidate_count": candidate_count,
+            "rare_valuable_positive_count": rare_valuable_positive,
+            "rare_valuable_zero_precursor_count": rare_valuable_zero,
+            "rare_valuable_all_count": rare_valuable_all,
+            "rare_useless_count": rare_useless,
+            "common_zero_count": common_zero,
+            "optional_invalid_count": optional_invalid,
+            "valuable_precision": valuable_precision,
+            "rare_valuable_recall": _safe_fraction(rare_valuable_all, total_rare_valuable_all),
+            "zero_precursor_recall": _safe_fraction(rare_valuable_zero, total_zero_precursors),
+            "rare_useless_fraction": rare_useless_fraction,
+            "rare_useless_enrichment": _enrichment_vs_uniform(rare_useless_fraction, base_rare_useless_fraction),
+            "common_zero_fraction": _safe_fraction(common_zero, candidate_count),
+            "nonvaluable_fraction": 1.0 - valuable_precision,
+        }
+        rows.append(row)
+    return rows
 
 
 def _count(labels: np.ndarray, label: str) -> int:
