@@ -89,7 +89,7 @@ class SparseGridConfig:
 def sparse_grid_config_from_dict(raw: Mapping[str, object] | None) -> SparseGridConfig:
     raw = dict(raw or {})
     layout = str(raw.get("layout", "default"))
-    if layout == "distractor_v2":
+    if layout in {"distractor_v2", "hybrid_v3"}:
         return SparseGridConfig.distractor_v2(
             width=int(raw.get("width", 21)),
             height=int(raw.get("height", 21)),
