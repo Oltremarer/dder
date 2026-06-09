@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from sklearn.neural_network import MLPRegressor
 
 from .replay_dataset import ReplayDataset
 
@@ -19,43 +20,29 @@ class DynamicsConsistencyScorer:
         self.hidden_dim = hidden_dim
         self.learning_rate = learning_rate
         self.seed = seed
-        self.model_ = None
+        self.model_: MLPRegressor | None = None
 
     def fit(self, dataset: ReplayDataset, mask: np.ndarray | None = None) -> "DynamicsConsistencyScorer":
-        import torch
-        from torch import nn
-
-        torch.manual_seed(self.seed)
         x, y = _make_xy(dataset)
         if mask is not None:
             x = x[mask]
             y = y[mask]
-        x_tensor = torch.as_tensor(x)
-        y_tensor = torch.as_tensor(y)
-        self.model_ = nn.Sequential(
-            nn.Linear(x.shape[1], self.hidden_dim),
-            nn.ReLU(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.ReLU(),
-            nn.Linear(self.hidden_dim, y.shape[1]),
+        self.model_ = MLPRegressor(
+            hidden_layer_sizes=(self.hidden_dim, self.hidden_dim),
+            activation="relu",
+            learning_rate_init=self.learning_rate,
+            max_iter=self.epochs,
+            random_state=self.seed,
+            early_stopping=False,
         )
-        opt = torch.optim.Adam(self.model_.parameters(), lr=self.learning_rate)
-        for _ in range(self.epochs):
-            pred = self.model_(x_tensor)
-            loss = ((pred - y_tensor) ** 2).mean()
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
+        self.model_.fit(x, y)
         return self
 
     def score(self, dataset: ReplayDataset) -> ConsistencyScores:
         if self.model_ is None:
             raise RuntimeError("DynamicsConsistencyScorer must be fit before score")
-        import torch
-
         x, y = _make_xy(dataset)
-        with torch.no_grad():
-            pred = self.model_(torch.as_tensor(x)).numpy()
+        pred = self.model_.predict(x)
         dynamics_error = ((pred[:, :2] - y[:, :2]) ** 2).mean(axis=1)
         reward_error = (pred[:, 2] - y[:, 2]) ** 2
         return ConsistencyScores(

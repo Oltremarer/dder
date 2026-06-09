@@ -192,7 +192,7 @@ git status --short
 - 先跑最快相关检查，优先 `pytest -q`，再跑单 seed diagnostic，最后才跑多 seed。
 - 不要提交 secrets。不要把 token、SSH key、服务器 IP、私有路径、`.env`、credential 文件写入代码或日志。
 - 不要做未经请求的 telemetry / network calls。除非任务明确要求，不要联网下载大型依赖、clone 新 repo、调用外部 API、上传日志。
-- 实验必须可复现。每个 run 必须记录 command、config path、seed、git branch、commit hash、Python version、torch version、machine info、start/end time、metrics csv。
+- 实验必须可复现。每个 run 必须记录 command、config path、seed、git branch、commit hash、Python version、numpy/sklearn version、machine info、start/end time、metrics csv。
 - 不要使用 `git add .`。应精确添加需要提交的文件，例如：
 
 ```bash
@@ -545,7 +545,7 @@ Ubuntu handoff rules:
 - Do not assume server hostname, username, repo path, conda env, SSH key, or credential.
 - If secrets are needed, ask the user to provide them via environment variables or existing SSH config.
 - Prefer reproducible command logs.
-- On remote, record `hostname`, `pwd`, `git rev-parse HEAD`, Python version, torch version, and exact command.
+- On remote, record `hostname`, `pwd`, `git rev-parse HEAD`, Python version, numpy/sklearn version, and exact command.
 - Run smoke tests first, not full experiments.
 
 Remote smoke-test template, only after user confirms server access details:
@@ -555,7 +555,6 @@ git clone <dder_repo_url>
 cd dder
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
 pip install -r experiments/r2v_replay/requirements.txt
 pytest -q experiments/r2v_replay/tests
 python experiments/r2v_replay/scripts/build_sparse_grid_replay.py --help

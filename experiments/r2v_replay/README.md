@@ -16,7 +16,6 @@ Run tests and diagnostics on Ubuntu.
 cd dder
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
 pip install -r experiments/r2v_replay/requirements.txt
 pytest -q experiments/r2v_replay/tests
 python experiments/r2v_replay/scripts/build_sparse_grid_replay.py --config experiments/r2v_replay/configs/level0_sparse_grid.yaml --seed 0 --n-transitions 50000 --output experiments/r2v_replay/outputs/seed0/replay.npz
