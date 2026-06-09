@@ -2,7 +2,7 @@ from collections import Counter
 
 import numpy as np
 
-from r2v_replay.sparse_grid import SparseGridConfig, SparseGridEnv, build_sparse_grid_replay
+from r2v_replay.sparse_grid import SparseGridConfig, SparseGridEnv, build_sparse_grid_replay, sparse_grid_config_from_dict
 
 
 def test_sparse_grid_step_is_deterministic_and_blocks_walls():
@@ -81,3 +81,52 @@ def test_distractor_v2_generates_real_rare_useless_from_probe_policy():
     assert (rare["reward"] == 0.0).all()
     assert (rare["return_to_go"] == 0.0).all()
     assert ((rare["distance_to_goal"] - rare["next_distance_to_goal"]) <= 0.0).all()
+
+
+def test_two_branch_v4_has_reachable_valuable_and_useless_branches():
+    cfg = sparse_grid_config_from_dict({"layout": "two_branch_v4"})
+    env = SparseGridEnv(cfg, seed=0)
+    start = env.reset()
+
+    assert start == cfg.start_states[0]
+    assert cfg.valuable_branch_states
+    assert cfg.useless_branch_states
+    assert cfg.valuable_branch_states.isdisjoint(cfg.useless_branch_states)
+
+    valuable_next, _, _, valuable_info = env.step(3)
+    env.reset()
+    useless_next, _, _, useless_info = env.step(2)
+
+    assert valuable_next in cfg.valuable_branch_states
+    assert useless_next in cfg.useless_branch_states
+    assert valuable_info["hit_wall"] is False
+    assert useless_info["hit_wall"] is False
+
+
+def test_two_branch_v4_generates_real_rare_value_and_rare_useless():
+    cfg = sparse_grid_config_from_dict({"layout": "two_branch_v4"})
+    dataset = build_sparse_grid_replay(
+        cfg,
+        n_transitions=1800,
+        seed=21,
+        policy_mix={
+            "random_wander": 0.20,
+            "near_success": 0.05,
+            "rare_valuable_branch_probe": 0.35,
+            "rare_distractor_probe": 0.40,
+        },
+    )
+    frame = dataset.to_frame()
+    rare_useless = frame[frame["label_for_eval_only"] == "rare_useless"]
+    zero_precursors = frame[frame["label_for_eval_only"] == "rare_valuable_zero_precursor"]
+    positives = frame[frame["label_for_eval_only"] == "rare_valuable_positive"]
+
+    assert len(rare_useless) > 0
+    assert len(zero_precursors) > 0
+    assert len(positives) > 0
+    assert set(rare_useless["behavior_policy_id"]) == {"rare_distractor_probe"}
+    assert (rare_useless["reward"] == 0.0).all()
+    assert (rare_useless["return_to_go"] == 0.0).all()
+    assert ((rare_useless["distance_to_goal"] - rare_useless["next_distance_to_goal"]) <= 0.0).all()
+    assert (zero_precursors["reward"] == 0.0).all()
+    assert (zero_precursors["return_to_go"] > 0.0).all()

@@ -23,6 +23,7 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--rarity-input", default=None)
     parser.add_argument("--rare-topk-ratio", type=float, default=None)
+    parser.add_argument("--k", type=int, default=None)
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
 
@@ -33,7 +34,7 @@ def main() -> None:
         if args.rare_topk_ratio is not None
         else cfg.get("selector", {}).get("rare_topk_ratio", 0.10)
     )
-    knn_k = int(cfg.get("scorers", {}).get("knn_k", 10))
+    knn_k = int(args.k if args.k is not None else cfg.get("scorers", {}).get("knn_k", 10))
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

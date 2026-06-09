@@ -30,6 +30,8 @@ class SparseGridConfig:
     decoy_states: frozenset[State] = frozenset()
     bottleneck_states: frozenset[State] = frozenset()
     main_corridor_states: frozenset[State] = frozenset()
+    valuable_branch_states: frozenset[State] = frozenset()
+    useless_branch_states: frozenset[State] = frozenset()
     distractor_pockets: tuple[frozenset[State], ...] = ()
     deep_distractor_states: frozenset[State] = frozenset()
     max_steps: int = 80
@@ -79,8 +81,80 @@ class SparseGridConfig:
             decoy_states=frozenset(),
             bottleneck_states=frozenset({(width // 2, height // 2), (width // 2 + 1, height // 2)}),
             main_corridor_states=frozenset(main_corridor),
+            valuable_branch_states=frozenset(main_corridor),
+            useless_branch_states=frozenset(),
             distractor_pockets=tuple(frozenset(pocket) for pocket in pockets),
             deep_distractor_states=deep_states,
+            max_steps=max_steps,
+            precursor_window=precursor_window,
+        )
+
+    @classmethod
+    def two_branch_v4(
+        cls,
+        width: int = 17,
+        height: int = 13,
+        max_steps: int = 80,
+        precursor_window: int = 12,
+    ) -> "SparseGridConfig":
+        if width < 17 or height < 13:
+            raise ValueError("two_branch_v4 requires width >= 17 and height >= 13")
+        split = (8, 6)
+        goal_state = (15, 10)
+        valuable_branch = _path_states(
+            [
+                split,
+                (9, 6),
+                (10, 6),
+                (11, 6),
+                (12, 6),
+                (13, 6),
+                (14, 6),
+                (15, 6),
+                (15, 7),
+                (15, 8),
+                (15, 9),
+                goal_state,
+            ]
+        )
+        useless_branch = _path_states(
+            [
+                split,
+                (7, 6),
+                (6, 6),
+                (5, 6),
+                (4, 6),
+                (3, 6),
+                (2, 6),
+                (1, 6),
+                (1, 5),
+                (1, 4),
+                (1, 3),
+                (1, 2),
+            ]
+        )
+        open_states = valuable_branch | useless_branch
+        walls = {
+            (x, y)
+            for x in range(width)
+            for y in range(height)
+            if (x, y) not in open_states
+        }
+        useless_only = useless_branch - {split}
+        valuable_only = valuable_branch - {split}
+        return cls(
+            width=width,
+            height=height,
+            start_states=(split,),
+            goal_state=goal_state,
+            walls=frozenset(walls),
+            decoy_states=frozenset(),
+            bottleneck_states=frozenset({(14, 6), (15, 6), (15, 7), (15, 8), (15, 9)}),
+            main_corridor_states=frozenset(valuable_branch),
+            valuable_branch_states=frozenset(valuable_only),
+            useless_branch_states=frozenset(useless_only),
+            distractor_pockets=(frozenset(useless_only),),
+            deep_distractor_states=frozenset(useless_only),
             max_steps=max_steps,
             precursor_window=precursor_window,
         )
@@ -97,6 +171,13 @@ def sparse_grid_config_from_dict(raw: Mapping[str, object] | None) -> SparseGrid
             max_steps=int(raw.get("max_steps", 90)),
             precursor_window=int(raw.get("precursor_window", 10)),
         )
+    if layout == "two_branch_v4":
+        return SparseGridConfig.two_branch_v4(
+            width=int(raw.get("width", 17)),
+            height=int(raw.get("height", 13)),
+            max_steps=int(raw.get("max_steps", 80)),
+            precursor_window=int(raw.get("precursor_window", 12)),
+        )
     cfg = SparseGridConfig.default()
     return SparseGridConfig(
         width=int(raw.get("width", cfg.width)),
@@ -107,11 +188,32 @@ def sparse_grid_config_from_dict(raw: Mapping[str, object] | None) -> SparseGrid
         decoy_states=cfg.decoy_states,
         bottleneck_states=cfg.bottleneck_states,
         main_corridor_states=cfg.main_corridor_states,
+        valuable_branch_states=cfg.valuable_branch_states,
+        useless_branch_states=cfg.useless_branch_states,
         distractor_pockets=cfg.distractor_pockets,
         deep_distractor_states=cfg.deep_distractor_states,
         max_steps=int(raw.get("max_steps", cfg.max_steps)),
         precursor_window=int(raw.get("precursor_window", cfg.precursor_window)),
     )
+
+
+def _path_states(points: list[State]) -> set[State]:
+    states: set[State] = set()
+    for start, end in zip(points, points[1:]):
+        x0, y0 = start
+        x1, y1 = end
+        if x0 != x1 and y0 != y1:
+            raise ValueError("path segments must be axis-aligned")
+        if x0 == x1:
+            step = 1 if y1 >= y0 else -1
+            for y in range(y0, y1 + step, step):
+                states.add((x0, y))
+        else:
+            step = 1 if x1 >= x0 else -1
+            for x in range(x0, x1 + step, step):
+                states.add((x, y0))
+    states.add(points[-1])
+    return states
 
 
 def _main_corridor(width: int, height: int, goal_state: State) -> set[State]:
@@ -241,16 +343,21 @@ def _policy_action(
         if rng.random() < 0.92:
             return _greedy_action_towards(state, env.config.goal_state, env, rng)
         return int(rng.integers(0, 4))
+    if policy_name == "rare_valuable_branch_probe":
+        if rng.random() < 0.94:
+            return _greedy_action_towards(state, env.config.goal_state, env, rng)
+        return int(rng.integers(0, 4))
     if policy_name == "rare_distractor_probe":
-        if not env.config.deep_distractor_states:
+        useless_states = env.config.useless_branch_states or env.config.deep_distractor_states
+        if not useless_states:
             return int(rng.integers(0, 4))
         context = episode_context if episode_context is not None else {}
         target = context.get("distractor_target")
         entry = context.get("distractor_entry")
         if target is None:
-            target = tuple(sorted(env.config.deep_distractor_states))[0]
+            target = tuple(sorted(useless_states))[0]
         target = tuple(target)  # type: ignore[arg-type]
-        if state in env.config.deep_distractor_states:
+        if state in useless_states:
             context["entered_distractor"] = True
             context["inside_steps_left"] = max(0, int(context.get("inside_steps_left", 1)) - 1)
             return int(rng.integers(0, 4))
@@ -264,6 +371,10 @@ def _policy_action(
 
 def _start_for_policy(policy_name: str, cfg: SparseGridConfig, rng: np.random.Generator) -> State:
     if policy_name == "near_success":
+        if cfg.valuable_branch_states:
+            candidates = sorted(cfg.valuable_branch_states, key=lambda s: abs(s[0] - cfg.goal_state[0]) + abs(s[1] - cfg.goal_state[1]))
+            candidates = [s for s in candidates if s != cfg.goal_state][:4]
+            return candidates[int(rng.integers(0, len(candidates)))]
         candidates = ((8, 7), (8, 8), (9, 8), (10, 9))
         valid = [s for s in candidates if 0 <= s[0] < cfg.width and 0 <= s[1] < cfg.height and s not in cfg.walls]
         return valid[int(rng.integers(0, len(valid)))]
@@ -274,6 +385,18 @@ def _start_for_policy(policy_name: str, cfg: SparseGridConfig, rng: np.random.Ge
 def _episode_context_for_policy(
     policy_name: str, cfg: SparseGridConfig, rng: np.random.Generator
 ) -> dict[str, object]:
+    if policy_name == "rare_distractor_probe" and cfg.useless_branch_states:
+        target = sorted(
+            cfg.useless_branch_states,
+            key=lambda s: (-(abs(s[0] - cfg.goal_state[0]) + abs(s[1] - cfg.goal_state[1])), s[0], s[1]),
+        )[0]
+        entry = min(cfg.useless_branch_states, key=lambda s: abs(s[0] - cfg.start_states[0][0]) + abs(s[1] - cfg.start_states[0][1]))
+        return {
+            "distractor_target": target,
+            "distractor_entry": entry,
+            "inside_steps_left": int(rng.integers(10, 20)),
+            "entered_distractor": False,
+        }
     if policy_name != "rare_distractor_probe" or not cfg.distractor_pockets:
         return {}
     pocket = cfg.distractor_pockets[int(rng.integers(0, len(cfg.distractor_pockets)))]
@@ -337,7 +460,8 @@ def _is_rare_useless_distractor_transition(
     success_index: int | None,
     row_index: int,
 ) -> bool:
-    if not cfg.deep_distractor_states:
+    useless_states = cfg.useless_branch_states or cfg.deep_distractor_states
+    if not useless_states:
         return False
     if str(row["behavior_policy_id"]) != "rare_distractor_probe":
         return False
@@ -348,7 +472,7 @@ def _is_rare_useless_distractor_transition(
         return False
     if state in cfg.main_corridor_states or next_state in cfg.main_corridor_states:
         return False
-    if state not in cfg.deep_distractor_states and next_state not in cfg.deep_distractor_states:
+    if state not in useless_states and next_state not in useless_states:
         return False
     if success_index is not None and 0 < (success_index - row_index) <= cfg.precursor_window:
         return False
