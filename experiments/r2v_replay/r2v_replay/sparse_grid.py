@@ -38,7 +38,7 @@ class SparseGridConfig:
         height = 15
         walls = {(7, y) for y in range(height) if y != 7}
         walls.update({(x, 7) for x in range(width) if x not in {6, 7, 8}})
-        decoy_states = {(x, y) for x in range(0, 4) for y in range(11, 15)}
+        decoy_states = {(x, y) for x in range(0, 4) for y in range(4, 7)}
         bottleneck_states = {(6, 7), (7, 7), (8, 7)}
         return cls(
             width=width,
@@ -112,7 +112,7 @@ def _policy_action(policy_name: str, env: SparseGridEnv, rng: np.random.Generato
             return _greedy_action_towards(state, env.config.goal_state, env, rng)
         return int(rng.integers(0, 4))
     if policy_name == "decoy":
-        decoy_target = min(env.config.decoy_states, key=lambda s: env.distance_to_goal(s))
+        decoy_target = min(env.config.decoy_states, key=lambda s: abs(s[0] - 3) + abs(s[1] - 6))
         if rng.random() < 0.85:
             return _greedy_action_towards(state, decoy_target, env, rng)
         return int(rng.integers(0, 4))
