@@ -2,14 +2,14 @@ grid:
   width: 15
   height: 15
   max_steps: 80
-  precursor_window: 8
+  precursor_window: 10
 
 dataset:
   n_transitions: 50000
   policy_mix:
-    random_wander: 0.58
+    random_wander: 0.59
     noisy_goal: 0.23
-    decoy: 0.04
+    decoy: 0.03
     near_success: 0.15
   include_optional_invalid: true
   optional_invalid_ratio: 0.03

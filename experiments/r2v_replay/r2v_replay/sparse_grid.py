@@ -30,7 +30,7 @@ class SparseGridConfig:
     decoy_states: frozenset[State] = frozenset()
     bottleneck_states: frozenset[State] = frozenset()
     max_steps: int = 80
-    precursor_window: int = 8
+    precursor_window: int = 10
 
     @classmethod
     def default(cls) -> "SparseGridConfig":
@@ -49,7 +49,7 @@ class SparseGridConfig:
             decoy_states=frozenset(decoy_states),
             bottleneck_states=frozenset(bottleneck_states),
             max_steps=80,
-            precursor_window=8,
+            precursor_window=10,
         )
 
 
@@ -213,9 +213,9 @@ def build_sparse_grid_replay(
     policy_mix = dict(
         policy_mix
         or {
-            "random_wander": 0.58,
+            "random_wander": 0.59,
             "noisy_goal": 0.23,
-            "decoy": 0.04,
+            "decoy": 0.03,
             "near_success": 0.15,
         }
     )
