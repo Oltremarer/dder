@@ -1,0 +1,18 @@
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environments
+.venv/
+venv/
+
+# R2V experiment outputs
+experiments/r2v_replay/.venv/
+experiments/r2v_replay/outputs/
+experiments/r2v_replay/artifacts/
+experiments/r2v_replay/reports/*.zip
+experiments/r2v_replay/**/*.pt
+experiments/r2v_replay/**/*.pth

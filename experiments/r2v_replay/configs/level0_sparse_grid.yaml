@@ -1,0 +1,45 @@
+grid:
+  width: 15
+  height: 15
+  max_steps: 80
+  precursor_window: 8
+
+dataset:
+  n_transitions: 50000
+  policy_mix:
+    random_wander: 0.55
+    noisy_goal: 0.20
+    decoy: 0.15
+    near_success: 0.10
+  include_optional_invalid: true
+  optional_invalid_ratio: 0.03
+
+encoder:
+  rarity_input: obs_action_next
+
+scorers:
+  knn_k: 10
+  diffusion:
+    steps: 32
+    epochs: 40
+    batch_size: 256
+    hidden_dim: 64
+    learning_rate: 0.001
+    eval_repeats: 4
+  utility:
+    w_reward: 0.2
+    w_rtg: 0.4
+    w_progress: 0.4
+  consistency:
+    epochs: 80
+    hidden_dim: 64
+    learning_rate: 0.001
+
+selector:
+  rare_topk_ratio: 0.10
+  selected_budget_ratio: 0.05
+  alpha: 0.25
+  beta: 1.0
+  gamma: 0.35
+  eta: 0.25
+  rho: 0.15
