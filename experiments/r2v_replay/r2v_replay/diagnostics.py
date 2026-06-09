@@ -58,26 +58,27 @@ def run_level0_diagnostic(dataset: ReplayDataset, cfg: dict, output_dir: str | P
 
     selector_cfg = cfg.get("selector", {})
     selector = R2VSelector(**selector_cfg)
+    real_indices = np.where(real_mask)[0]
     selection_scores = SelectionScores(
-        indices=np.arange(len(dataset)),
-        rarity=diffusion_rarity,
-        utility=utility.total,
-        ood_risk=risk,
-        dynamics_error=consistency.dynamics_error,
-        reward_error=consistency.reward_error,
+        indices=real_indices,
+        rarity=diffusion_rarity[real_mask],
+        utility=utility.total[real_mask],
+        ood_risk=risk[real_mask],
+        dynamics_error=consistency.dynamics_error[real_mask],
+        reward_error=consistency.reward_error[real_mask],
     )
     r2v_diff = selector.select(selection_scores)
     selection_scores_knn = SelectionScores(
-        indices=np.arange(len(dataset)),
-        rarity=knn_rarity,
-        utility=utility.total,
-        ood_risk=risk,
-        dynamics_error=consistency.dynamics_error,
-        reward_error=consistency.reward_error,
+        indices=real_indices,
+        rarity=knn_rarity[real_mask],
+        utility=utility.total[real_mask],
+        ood_risk=risk[real_mask],
+        dynamics_error=consistency.dynamics_error[real_mask],
+        reward_error=consistency.reward_error[real_mask],
     )
     r2v_knn = selector.select(selection_scores_knn)
 
-    baselines = build_baseline_indices(score_table, selector_cfg)
+    baselines = build_baseline_indices(score_table, selector_cfg, real_mask)
     baselines["r2v_diffusion"] = r2v_diff.indices
     baselines["r2v_knn"] = r2v_knn.indices
 
@@ -99,20 +100,27 @@ def run_level0_diagnostic(dataset: ReplayDataset, cfg: dict, output_dir: str | P
     return {"metrics": metrics, "compositions": compositions}
 
 
-def build_baseline_indices(score_table: pd.DataFrame, selector_cfg: dict) -> dict[str, np.ndarray]:
+def build_baseline_indices(score_table: pd.DataFrame, selector_cfg: dict, eligible_mask: np.ndarray) -> dict[str, np.ndarray]:
     n = len(score_table)
+    eligible_indices = np.where(eligible_mask)[0]
     rare_topk_ratio = float(selector_cfg.get("rare_topk_ratio", 0.10))
     selected_budget_ratio = float(selector_cfg.get("selected_budget_ratio", 0.05))
-    rare_n = max(1, int(np.ceil(n * rare_topk_ratio)))
+    rare_n = max(1, int(np.ceil(len(eligible_indices) * rare_topk_ratio)))
     budget_n = max(1, int(np.ceil(rare_n * selected_budget_ratio)))
     rng = np.random.default_rng(0)
-    diff_top = np.argsort(-score_table["diffusion_rarity"].to_numpy())[:rare_n]
+    diff_scores = score_table["diffusion_rarity"].to_numpy()[eligible_indices]
+    diff_top = eligible_indices[np.argsort(-diff_scores)[:rare_n]]
+
+    def top_by(column: str) -> np.ndarray:
+        values = score_table[column].to_numpy()[eligible_indices]
+        return eligible_indices[np.argsort(-values)[:budget_n]]
+
     return {
-        "uniform_random": rng.choice(np.arange(n), size=budget_n, replace=False),
-        "reward_only": np.argsort(-score_table["reward"].to_numpy())[:budget_n],
-        "rtg_only": np.argsort(-score_table["return_to_go"].to_numpy())[:budget_n],
-        "progress_only": np.argsort(-score_table["utility_progress"].to_numpy())[:budget_n],
-        "knn_rarity_only": np.argsort(-score_table["knn_rarity"].to_numpy())[:budget_n],
+        "uniform_random": rng.choice(eligible_indices, size=budget_n, replace=False),
+        "reward_only": top_by("reward"),
+        "rtg_only": top_by("return_to_go"),
+        "progress_only": top_by("utility_progress"),
+        "knn_rarity_only": top_by("knn_rarity"),
         "diffusion_rarity_only": diff_top[:budget_n],
         "random_from_diffusion_rare_topk": rng.choice(diff_top, size=budget_n, replace=False),
     }
@@ -124,8 +132,8 @@ def compute_metrics(score_table: pd.DataFrame, baselines: dict[str, np.ndarray],
     rare_any = np.isin(labels, list(RARE_ANY)) & real_mask
     rare_valuable = np.isin(labels, list(RARE_VALUABLE)) & real_mask
     common = (labels == "common_zero") & real_mask
-    top10 = _top_fraction(score_table["diffusion_rarity"].to_numpy(), rare_topk_ratio)
-    top20 = _top_fraction(score_table["diffusion_rarity"].to_numpy(), 0.20)
+    top10 = _top_fraction(score_table["diffusion_rarity"].to_numpy(), rare_topk_ratio, eligible_mask=real_mask)
+    top20 = _top_fraction(score_table["diffusion_rarity"].to_numpy(), 0.20, eligible_mask=real_mask)
 
     metrics: dict[str, float] = {
         "h1_auroc_common_vs_rare_any": _safe_auc(rare_any[common | rare_any], score_table["diffusion_rarity"].to_numpy()[common | rare_any]),
@@ -136,7 +144,7 @@ def compute_metrics(score_table: pd.DataFrame, baselines: dict[str, np.ndarray],
         "h1_enrichment_top10_rare_valuable": _enrichment(rare_valuable, top10),
         "h2_rare_useless_fraction_diffusion_top10": float(np.mean(labels[top10] == "rare_useless")),
         "h2_valuable_precision_diffusion_top10": float(np.mean(np.isin(labels[top10], list(RARE_VALUABLE)))),
-        "h2_rare_useless_enrichment_vs_uniform": _enrichment(labels == "rare_useless", top10),
+        "h2_rare_useless_enrichment_vs_uniform": _enrichment((labels == "rare_useless") & real_mask, top10),
     }
 
     for name, indices in baselines.items():
@@ -173,10 +181,11 @@ def write_failure_tables(score_table: pd.DataFrame, selected_indices: np.ndarray
     real.sort_values("diffusion_rarity", ascending=False).head(50).to_csv(output_dir / "top_failure_cases.csv", index=False)
 
 
-def _top_fraction(values: np.ndarray, ratio: float) -> np.ndarray:
-    n = max(1, int(np.ceil(len(values) * ratio)))
+def _top_fraction(values: np.ndarray, ratio: float, eligible_mask: np.ndarray | None = None) -> np.ndarray:
+    eligible = np.arange(len(values)) if eligible_mask is None else np.where(eligible_mask)[0]
+    n = max(1, int(np.ceil(len(eligible) * ratio)))
     mask = np.zeros(len(values), dtype=bool)
-    mask[np.argsort(-values)[:n]] = True
+    mask[eligible[np.argsort(-values[eligible])[:n]]] = True
     return mask
 
 
