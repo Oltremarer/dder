@@ -213,10 +213,10 @@ def build_sparse_grid_replay(
     policy_mix = dict(
         policy_mix
         or {
-            "random_wander": 0.55,
-            "noisy_goal": 0.20,
-            "decoy": 0.15,
-            "near_success": 0.10,
+            "random_wander": 0.66,
+            "noisy_goal": 0.23,
+            "decoy": 0.04,
+            "near_success": 0.07,
         }
     )
     names = np.array(list(policy_mix.keys()))
