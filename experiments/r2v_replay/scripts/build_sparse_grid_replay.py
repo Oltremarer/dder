@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from r2v_replay.sparse_grid import SparseGridConfig, build_sparse_grid_replay
+from r2v_replay.sparse_grid import build_sparse_grid_replay, sparse_grid_config_from_dict
 from r2v_replay.utils import load_yaml
 
 
@@ -21,7 +21,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg_raw = load_yaml(args.config)
-    grid_cfg = SparseGridConfig.default()
+    grid_cfg = sparse_grid_config_from_dict(cfg_raw.get("grid", {}))
     n_transitions = args.n_transitions or int(cfg_raw.get("dataset", {}).get("n_transitions", 50000))
     dataset_cfg = cfg_raw.get("dataset", {})
     dataset = build_sparse_grid_replay(

@@ -8,6 +8,7 @@ import pandas as pd
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from .consistency_scorers import DynamicsConsistencyScorer
+from .density_audit import density_audit_tables
 from .encoders import TransitionEncoder
 from .metric_audit import selection_audit_row
 from .rarity_scorers import DiffusionConfig, DiffusionRarityScorer, KNNRarityScorer
@@ -89,6 +90,14 @@ def run_level0_diagnostic(dataset: ReplayDataset, cfg: dict, output_dir: str | P
     }
 
     score_table.to_csv(output_dir / "score_table.csv", index=False)
+    density_tables = density_audit_tables(
+        dataset,
+        knn_scores=knn_raw,
+        top_ratio=float(selector_cfg.get("rare_topk_ratio", 0.10)),
+        eligible_mask=real_mask,
+    )
+    for name, table in density_tables.items():
+        table.to_csv(output_dir / f"{name}.csv", index=False)
     pd.DataFrame(diffusion_components).assign(index=np.arange(len(dataset))).to_csv(
         output_dir / "diffusion_score_components.csv", index=False
     )

@@ -1,0 +1,49 @@
+grid:
+  layout: distractor_v2
+  width: 41
+  height: 41
+  max_steps: 140
+  precursor_window: 10
+  num_distractor_pockets: 32
+
+dataset:
+  n_transitions: 50000
+  policy_mix:
+    random_wander: 0.52
+    noisy_goal: 0.16
+    near_success: 0.06
+    rare_distractor_probe: 0.26
+  include_optional_invalid: true
+  optional_invalid_ratio: 0.03
+
+encoder:
+  rarity_input: obs_action_next
+
+scorers:
+  knn_k: 50
+  diffusion:
+    steps: 32
+    epochs: 24
+    batch_size: 256
+    hidden_dim: 48
+    learning_rate: 0.001
+    eval_repeats: 2
+    folds: 3
+    noise_levels: [0.03, 0.05, 0.10, 0.20, 0.35]
+  utility:
+    w_reward: 0.15
+    w_rtg: 0.55
+    w_progress: 0.30
+  consistency:
+    epochs: 80
+    hidden_dim: 64
+    learning_rate: 0.001
+
+selector:
+  rare_topk_ratio: 0.10
+  selected_budget_ratio: 0.05
+  alpha: 0.30
+  beta: 0.55
+  gamma: 0.05
+  eta: 0.05
+  rho: 0.05

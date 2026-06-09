@@ -29,6 +29,9 @@ class SparseGridConfig:
     walls: frozenset[State] = frozenset()
     decoy_states: frozenset[State] = frozenset()
     bottleneck_states: frozenset[State] = frozenset()
+    main_corridor_states: frozenset[State] = frozenset()
+    distractor_pockets: tuple[frozenset[State], ...] = ()
+    deep_distractor_states: frozenset[State] = frozenset()
     max_steps: int = 80
     precursor_window: int = 10
 
@@ -51,6 +54,119 @@ class SparseGridConfig:
             max_steps=80,
             precursor_window=10,
         )
+
+    @classmethod
+    def distractor_v2(
+        cls,
+        width: int = 21,
+        height: int = 21,
+        num_distractor_pockets: int = 6,
+        max_steps: int = 90,
+        precursor_window: int = 10,
+    ) -> "SparseGridConfig":
+        if width < 15 or height < 15:
+            raise ValueError("distractor_v2 requires width and height >= 15")
+        goal_state = (width - 2, height - 2)
+        main_corridor = _main_corridor(width, height, goal_state)
+        pockets, pocket_walls = _make_distractor_pockets(width, height, num_distractor_pockets)
+        deep_states = frozenset().union(*pockets) if pockets else frozenset()
+        return cls(
+            width=width,
+            height=height,
+            start_states=((1, 1), (1, 2), (2, 1), (2, 2)),
+            goal_state=goal_state,
+            walls=frozenset(pocket_walls),
+            decoy_states=frozenset(),
+            bottleneck_states=frozenset({(width // 2, height // 2), (width // 2 + 1, height // 2)}),
+            main_corridor_states=frozenset(main_corridor),
+            distractor_pockets=tuple(frozenset(pocket) for pocket in pockets),
+            deep_distractor_states=deep_states,
+            max_steps=max_steps,
+            precursor_window=precursor_window,
+        )
+
+
+def sparse_grid_config_from_dict(raw: Mapping[str, object] | None) -> SparseGridConfig:
+    raw = dict(raw or {})
+    layout = str(raw.get("layout", "default"))
+    if layout == "distractor_v2":
+        return SparseGridConfig.distractor_v2(
+            width=int(raw.get("width", 21)),
+            height=int(raw.get("height", 21)),
+            num_distractor_pockets=int(raw.get("num_distractor_pockets", 6)),
+            max_steps=int(raw.get("max_steps", 90)),
+            precursor_window=int(raw.get("precursor_window", 10)),
+        )
+    cfg = SparseGridConfig.default()
+    return SparseGridConfig(
+        width=int(raw.get("width", cfg.width)),
+        height=int(raw.get("height", cfg.height)),
+        start_states=cfg.start_states,
+        goal_state=cfg.goal_state,
+        walls=cfg.walls,
+        decoy_states=cfg.decoy_states,
+        bottleneck_states=cfg.bottleneck_states,
+        main_corridor_states=cfg.main_corridor_states,
+        distractor_pockets=cfg.distractor_pockets,
+        deep_distractor_states=cfg.deep_distractor_states,
+        max_steps=int(raw.get("max_steps", cfg.max_steps)),
+        precursor_window=int(raw.get("precursor_window", cfg.precursor_window)),
+    )
+
+
+def _main_corridor(width: int, height: int, goal_state: State) -> set[State]:
+    corridor: set[State] = set()
+    y_mid = max(2, height // 2)
+    for x in range(1, goal_state[0] + 1):
+        corridor.add((x, 1))
+    for y in range(1, y_mid + 1):
+        corridor.add((goal_state[0], y))
+    for x in range(width // 2, goal_state[0] + 1):
+        corridor.add((x, y_mid))
+    for y in range(y_mid, goal_state[1] + 1):
+        corridor.add((width // 2, y))
+    for x in range(width // 2, goal_state[0] + 1):
+        corridor.add((x, goal_state[1]))
+    return corridor
+
+
+def _make_distractor_pockets(width: int, height: int, count: int) -> tuple[list[set[State]], set[State]]:
+    centers: list[State] = [
+        (3, height - 5),
+        (6, height - 8),
+        (width - 7, 4),
+        (width - 5, height // 2),
+        (width // 2 - 3, height - 4),
+        (width // 2 + 3, 5),
+        (4, height // 2),
+        (width - 8, height - 6),
+    ]
+    for x in range(3, width - 4, 5):
+        for y in range(4, height - 4, 5):
+            center = (x, y)
+            if center not in centers and abs(x - (width - 2)) + abs(y - (height - 2)) > 8:
+                centers.append(center)
+    pockets: list[set[State]] = []
+    walls: set[State] = set()
+    used: set[State] = set()
+    for cx, cy in centers[:count]:
+        cx = min(max(2, cx), width - 4)
+        cy = min(max(2, cy), height - 4)
+        pocket = {(cx, cy), (cx + 1, cy), (cx, cy + 1), (cx + 1, cy + 1)}
+        entry = (cx - 1, cy)
+        if pocket & used or entry in used:
+            continue
+        used.update(pocket)
+        used.add(entry)
+        pockets.append(pocket)
+        for x in range(cx - 1, cx + 3):
+            for y in range(cy - 1, cy + 3):
+                state = (x, y)
+                if state in pocket or state == entry:
+                    continue
+                if 0 <= x < width and 0 <= y < height:
+                    walls.add(state)
+    return pockets, walls
 
 
 class SparseGridEnv:
@@ -103,7 +219,12 @@ def _greedy_action_towards(state: State, target: State, env: SparseGridEnv, rng:
     return int(rng.choice(best_actions))
 
 
-def _policy_action(policy_name: str, env: SparseGridEnv, rng: np.random.Generator) -> Action:
+def _policy_action(
+    policy_name: str,
+    env: SparseGridEnv,
+    rng: np.random.Generator,
+    episode_context: dict[str, object] | None = None,
+) -> Action:
     state = env.state
     if policy_name == "random_wander":
         return int(rng.integers(0, 4))
@@ -120,6 +241,24 @@ def _policy_action(policy_name: str, env: SparseGridEnv, rng: np.random.Generato
         if rng.random() < 0.92:
             return _greedy_action_towards(state, env.config.goal_state, env, rng)
         return int(rng.integers(0, 4))
+    if policy_name == "rare_distractor_probe":
+        if not env.config.deep_distractor_states:
+            return int(rng.integers(0, 4))
+        context = episode_context if episode_context is not None else {}
+        target = context.get("distractor_target")
+        entry = context.get("distractor_entry")
+        if target is None:
+            target = tuple(sorted(env.config.deep_distractor_states))[0]
+        target = tuple(target)  # type: ignore[arg-type]
+        if state in env.config.deep_distractor_states:
+            context["entered_distractor"] = True
+            context["inside_steps_left"] = max(0, int(context.get("inside_steps_left", 1)) - 1)
+            return int(rng.integers(0, 4))
+        if entry is not None and state != tuple(entry):  # type: ignore[arg-type]
+            target = tuple(entry)  # type: ignore[arg-type]
+        if rng.random() < 0.88:
+            return _greedy_action_towards(state, target, env, rng)
+        return int(rng.integers(0, 4))
     raise ValueError(f"unknown policy: {policy_name}")
 
 
@@ -130,6 +269,31 @@ def _start_for_policy(policy_name: str, cfg: SparseGridConfig, rng: np.random.Ge
         return valid[int(rng.integers(0, len(valid)))]
     idx = int(rng.integers(0, len(cfg.start_states)))
     return cfg.start_states[idx]
+
+
+def _episode_context_for_policy(
+    policy_name: str, cfg: SparseGridConfig, rng: np.random.Generator
+) -> dict[str, object]:
+    if policy_name != "rare_distractor_probe" or not cfg.distractor_pockets:
+        return {}
+    pocket = cfg.distractor_pockets[int(rng.integers(0, len(cfg.distractor_pockets)))]
+    target = sorted(pocket)[int(rng.integers(0, len(pocket)))]
+    min_x = min(x for x, _ in pocket)
+    min_y = min(y for _, y in pocket)
+    return {
+        "distractor_target": target,
+        "distractor_entry": (min_x - 1, min_y),
+        "inside_steps_left": int(rng.integers(12, 25)),
+        "entered_distractor": False,
+    }
+
+
+def _should_end_episode_for_policy(policy_name: str, episode_context: dict[str, object]) -> bool:
+    return (
+        policy_name == "rare_distractor_probe"
+        and bool(episode_context.get("entered_distractor", False))
+        and int(episode_context.get("inside_steps_left", 0)) <= 0
+    )
 
 
 def _label_episode(records: list[dict[str, object]], cfg: SparseGridConfig) -> None:
@@ -147,7 +311,9 @@ def _label_episode(records: list[dict[str, object]], cfg: SparseGridConfig) -> N
         elif success_index is not None and episode_return > 0.0 and 0 < (success_index - i) <= cfg.precursor_window:
             in_bottleneck = state in cfg.bottleneck_states or next_state in cfg.bottleneck_states
             label = "rare_valuable_zero_precursor" if progress >= 1.0 or in_bottleneck else "common_zero"
-        elif _is_deep_decoy_transition(state, next_state, cfg):
+        elif _is_rare_useless_distractor_transition(row, state, next_state, cfg, episode_return, success_index, i):
+            label = "rare_useless"
+        elif not cfg.deep_distractor_states and _is_deep_decoy_transition(state, next_state, cfg):
             label = "rare_useless"
         else:
             label = "common_zero"
@@ -160,6 +326,33 @@ def _is_deep_decoy_transition(state: State, next_state: State, cfg: SparseGridCo
         return False
     deep_decoy = max(cfg.decoy_states, key=lambda s: (s[0] + s[1], s[0], s[1]))
     return state == deep_decoy or next_state == deep_decoy
+
+
+def _is_rare_useless_distractor_transition(
+    row: dict[str, object],
+    state: State,
+    next_state: State,
+    cfg: SparseGridConfig,
+    episode_return: float,
+    success_index: int | None,
+    row_index: int,
+) -> bool:
+    if not cfg.deep_distractor_states:
+        return False
+    if str(row["behavior_policy_id"]) != "rare_distractor_probe":
+        return False
+    if float(row["reward"]) != 0.0 or episode_return != 0.0 or success_index is not None:
+        return False
+    progress = float(row["distance_to_goal"]) - float(row["next_distance_to_goal"])
+    if progress > 0.0:
+        return False
+    if state in cfg.main_corridor_states or next_state in cfg.main_corridor_states:
+        return False
+    if state not in cfg.deep_distractor_states and next_state not in cfg.deep_distractor_states:
+        return False
+    if success_index is not None and 0 < (success_index - row_index) <= cfg.precursor_window:
+        return False
+    return True
 
 
 def _make_optional_invalid(dataset: ReplayDataset, ratio: float, seed: int) -> ReplayDataset:
@@ -234,20 +427,22 @@ def build_sparse_grid_replay(
     episode_id = 0
     while len(rows) < n_transitions:
         policy = str(rng.choice(names, p=weights))
+        episode_context = _episode_context_for_policy(policy, config, rng)
         env.reset(_start_for_policy(policy, config, rng))
         episode_rows: list[dict[str, object]] = []
         for t in range(config.max_steps):
             state = env.state
             distance = env.distance_to_goal(state)
-            action = _policy_action(policy, env, rng)
+            action = _policy_action(policy, env, rng, episode_context)
             next_state, reward, done, _ = env.step(action)
+            policy_done = _should_end_episode_for_policy(policy, episode_context)
             episode_rows.append(
                 {
                     "state": state,
                     "action": action,
                     "reward": reward,
                     "next_state": next_state,
-                    "done": done,
+                    "done": done or policy_done,
                     "episode_id": episode_id,
                     "timestep": t,
                     "behavior_policy_id": policy,
@@ -257,7 +452,7 @@ def build_sparse_grid_replay(
                     "label_for_eval_only": "common_zero",
                 }
             )
-            if done:
+            if done or policy_done:
                 break
         _label_episode(episode_rows, config)
         rows.extend(episode_rows)
