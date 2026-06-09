@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from r2v_replay.density_audit import density_audit_tables
 from r2v_replay.encoders import TransitionEncoder
+from r2v_replay.geometry_audit import distance_to_label_rows, multiplicity_summary_rows
 from r2v_replay.rarity_scorers import KNNRarityScorer
 from r2v_replay.replay_dataset import ReplayDataset
 from r2v_replay.utils import load_yaml, run_metadata, write_json
@@ -48,6 +49,25 @@ def main() -> None:
     summary = tables["density_audit_by_label"].copy()
     summary.insert(0, "rarity_input", rarity_input)
     summary.to_csv(output_dir / "density_summary.csv", index=False)
+    geometry_density = pd.DataFrame(
+        multiplicity_summary_rows(
+            labels=dataset.labels,
+            states=dataset.states,
+            actions=dataset.actions,
+            next_states=dataset.next_states,
+            scores=knn_scores,
+            raw_distances=knn_scores,
+        )
+    )
+    geometry_density.to_csv(output_dir / "geometry_density_summary.csv", index=False)
+    geometry_density.to_csv(output_dir / "duplicate_multiplicity_by_label.csv", index=False)
+    pd.DataFrame(
+        distance_to_label_rows(
+            dataset,
+            rarity_input=rarity_input,
+            target_labels=["common_zero", "rare_valuable", "rare_useless"],
+        )
+    ).to_csv(output_dir / "distance_to_common_zero_summary.csv", index=False)
     write_json(output_dir / "run_metadata.json", run_metadata(" ".join(sys.argv), args.config, seed=0))
     print(pd.read_csv(output_dir / "rare_useless_density_audit.csv").to_string(index=False))
 

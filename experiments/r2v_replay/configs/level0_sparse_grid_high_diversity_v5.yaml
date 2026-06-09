@@ -1,0 +1,53 @@
+grid:
+  layout: high_diversity_v5
+  width: 45
+  height: 45
+  max_steps: 140
+  precursor_window: 12
+  num_distractor_pockets: 48
+  distractor_inside_min_steps: 4
+  distractor_inside_max_steps: 9
+  near_success_start_count: 20
+
+dataset:
+  n_transitions: 50000
+  policy_mix:
+    random_wander: 0.48
+    noisy_goal: 0.18
+    near_success: 0.12
+    rare_valuable_branch_probe: 0.04
+    rare_distractor_probe: 0.18
+  include_optional_invalid: true
+  optional_invalid_ratio: 0.03
+
+encoder:
+  rarity_input: obs_action_next
+
+scorers:
+  knn_k: 50
+  diffusion:
+    steps: 32
+    epochs: 24
+    batch_size: 256
+    hidden_dim: 48
+    learning_rate: 0.001
+    eval_repeats: 2
+    folds: 3
+    noise_levels: [0.03, 0.05, 0.10, 0.20, 0.35]
+  utility:
+    w_reward: 0.15
+    w_rtg: 0.55
+    w_progress: 0.30
+  consistency:
+    epochs: 80
+    hidden_dim: 64
+    learning_rate: 0.001
+
+selector:
+  rare_topk_ratio: 0.10
+  selected_budget_ratio: 0.05
+  alpha: 0.30
+  beta: 0.55
+  gamma: 0.05
+  eta: 0.05
+  rho: 0.05

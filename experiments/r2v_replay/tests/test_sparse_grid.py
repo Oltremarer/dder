@@ -130,3 +130,51 @@ def test_two_branch_v4_generates_real_rare_value_and_rare_useless():
     assert ((rare_useless["distance_to_goal"] - rare_useless["next_distance_to_goal"]) <= 0.0).all()
     assert (zero_precursors["reward"] == 0.0).all()
     assert (zero_precursors["return_to_go"] > 0.0).all()
+
+
+def test_high_diversity_v5_generates_diverse_real_branches():
+    cfg = sparse_grid_config_from_dict(
+        {
+            "layout": "high_diversity_v5",
+            "width": 33,
+            "height": 33,
+            "num_distractor_pockets": 20,
+            "distractor_inside_min_steps": 3,
+            "distractor_inside_max_steps": 7,
+            "near_success_start_count": 12,
+        }
+    )
+    dataset = build_sparse_grid_replay(
+        cfg,
+        n_transitions=3000,
+        seed=37,
+        policy_mix={
+            "random_wander": 0.22,
+            "noisy_goal": 0.20,
+            "near_success": 0.18,
+            "rare_valuable_branch_probe": 0.08,
+            "rare_distractor_probe": 0.32,
+        },
+    )
+    frame = dataset.to_frame()
+    rare_useless = frame[frame["label_for_eval_only"] == "rare_useless"]
+    zero_precursors = frame[frame["label_for_eval_only"] == "rare_valuable_zero_precursor"]
+
+    assert len(cfg.distractor_pockets) >= 20
+    assert cfg.distractor_inside_steps == (3, 7)
+    assert cfg.distractor_start_at_entry is True
+    assert cfg.near_success_start_count == 12
+    assert len(rare_useless) > 0
+    assert len(zero_precursors) > 0
+    assert set(rare_useless["behavior_policy_id"]) == {"rare_distractor_probe"}
+    assert (rare_useless["reward"] == 0.0).all()
+    assert (rare_useless["return_to_go"] == 0.0).all()
+    assert ((rare_useless["distance_to_goal"] - rare_useless["next_distance_to_goal"]) <= 0.0).all()
+    assert (zero_precursors["reward"] == 0.0).all()
+    assert (zero_precursors["return_to_go"] > 0.0).all()
+    assert _unique_transition_count(rare_useless) >= 20
+    assert _unique_transition_count(zero_precursors) >= 20
+
+
+def _unique_transition_count(frame):
+    return int(frame[["state_x", "state_y", "action", "next_state_x", "next_state_y"]].drop_duplicates().shape[0])
