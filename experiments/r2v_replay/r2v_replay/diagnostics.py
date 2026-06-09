@@ -9,6 +9,7 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 
 from .consistency_scorers import DynamicsConsistencyScorer
 from .encoders import TransitionEncoder
+from .metric_audit import selection_audit_row
 from .rarity_scorers import DiffusionConfig, DiffusionRarityScorer, KNNRarityScorer
 from .replay_dataset import ReplayDataset
 from .risk_scorers import OODRiskScorer
@@ -167,6 +168,7 @@ def compute_metrics(
         values = score_table[rarity_column].to_numpy()
         top10 = _top_fraction(values, rare_topk_ratio, eligible_mask=real_mask)
         top20 = _top_fraction(values, 0.20, eligible_mask=real_mask)
+        top10_idx = np.where(top10)[0]
         scorer_metrics = {
             f"h1_{scorer_name}_auroc_common_vs_rare_any": _safe_auc(rare_any[common | rare_any], values[common | rare_any]),
             f"h1_{scorer_name}_auprc_common_vs_rare_any": _safe_ap(rare_any[common | rare_any], values[common | rare_any]),
@@ -174,8 +176,11 @@ def compute_metrics(
             f"h1_{scorer_name}_recall_top10_rare_valuable": _recall(rare_valuable, top10),
             f"h1_{scorer_name}_recall_top20_rare_valuable": _recall(rare_valuable, top20),
             f"h1_{scorer_name}_enrichment_top10_rare_valuable": _enrichment(rare_valuable, top10),
+            f"h2_{scorer_name}_candidate_count_top10": float(len(top10_idx)),
+            f"h2_{scorer_name}_rare_useless_count_top10": float((labels[top10] == "rare_useless").sum()),
             f"h2_{scorer_name}_rare_useless_fraction_top10": float(np.mean(labels[top10] == "rare_useless")),
             f"h2_{scorer_name}_valuable_precision_top10": float(np.mean(np.isin(labels[top10], list(RARE_VALUABLE)))),
+            f"h2_{scorer_name}_common_zero_fraction_top10": float(np.mean(labels[top10] == "common_zero")),
             f"h2_{scorer_name}_rare_useless_enrichment_vs_uniform": _enrichment(
                 (labels == "rare_useless") & real_mask, top10
             ),
@@ -189,9 +194,27 @@ def compute_metrics(
         zero_precursor = (labels == "rare_valuable_zero_precursor") & real_mask
         no_risk_mask = _mask_from_indices(len(labels), selector_results[f"r2v_{scorer_name}_no_risk"].indices)
         full_mask = _mask_from_indices(len(labels), selector_results[f"r2v_{scorer_name}_full"].indices)
+        no_risk_indices = selector_results[f"r2v_{scorer_name}_no_risk"].indices
+        full_indices = selector_results[f"r2v_{scorer_name}_full"].indices
+        rewards = score_table["reward"].to_numpy()
         metrics[f"h3_{scorer_name}_zero_precursor_available_in_rarity_top10"] = float(
             (zero_precursor & candidate_mask).sum()
         )
+        metrics[f"h3_{scorer_name}_zero_precursor_selected_no_risk"] = float((zero_precursor & no_risk_mask).sum())
+        metrics[f"h3_{scorer_name}_zero_precursor_selected_full"] = float((zero_precursor & full_mask).sum())
+        metrics[f"h3_{scorer_name}_rare_useless_available_in_rarity_top10"] = float(
+            ((labels == "rare_useless") & candidate_mask).sum()
+        )
+        metrics[f"h3_{scorer_name}_rare_useless_selected_no_risk"] = float(
+            (labels[no_risk_indices] == "rare_useless").sum()
+        )
+        metrics[f"h3_{scorer_name}_rare_useless_selected_full"] = float(
+            (labels[full_indices] == "rare_useless").sum()
+        )
+        metrics[f"h3_{scorer_name}_positive_rewards_available_in_rarity_top10"] = float(
+            ((rewards > 0) & candidate_mask).sum()
+        )
+        metrics[f"h3_{scorer_name}_positive_rewards_selected_full"] = float((rewards[full_indices] > 0).sum())
         metrics[f"h3_{scorer_name}_zero_precursor_candidate_recall"] = _recall(zero_precursor, candidate_mask)
         metrics[f"h3_{scorer_name}_zero_precursor_retention_no_risk_from_candidate"] = _conditional_fraction(
             zero_precursor & candidate_mask, no_risk_mask
@@ -212,6 +235,16 @@ def compute_metrics(
             (labels == "rare_valuable_zero_precursor") & real_mask, _mask_from_indices(len(labels), idx)
         )
         metrics[f"{name}_positive_reward_fraction"] = _mean_mask(score_table["reward"].to_numpy()[idx] > 0)
+        audit = selection_audit_row(
+            labels=labels,
+            rewards=score_table["reward"].to_numpy(),
+            selected_indices=idx,
+            candidate_indices=idx,
+            real_mask=real_mask,
+            episode_ids=score_table["episode_id"].to_numpy(),
+        )
+        metrics[f"{name}_selected_episode_diversity"] = float(audit["selected_episode_diversity"])
+        metrics[f"{name}_all_assertion_checks_pass"] = float(bool(audit["all_assertion_checks_pass"]))
 
     invalid = labels == "optional_invalid"
     if invalid.any():
@@ -245,16 +278,30 @@ def write_funnel_tables(
     output_dir: Path,
 ) -> None:
     labels = score_table["label_for_eval_only"].to_numpy()
+    rewards = score_table["reward"].to_numpy()
+    real_mask = ~score_table["optional_invalid"].to_numpy(dtype=bool)
+    episode_ids = score_table["episode_id"].to_numpy()
     stage_rows = []
     composition_rows = []
+    audit_rows = []
     for scorer_name in RARITY_COLUMNS:
+        scorer_candidate = selector_results[f"r2v_{scorer_name}_full"].candidate_indices
         stages = {
-            "candidate_top10": selector_results[f"r2v_{scorer_name}_full"].candidate_indices,
+            "candidate_top10": scorer_candidate,
             "r2v_no_risk": selector_results[f"r2v_{scorer_name}_no_risk"].indices,
             "r2v_full": selector_results[f"r2v_{scorer_name}_full"].indices,
         }
         for stage, indices in stages.items():
             stage_rows.append(_stage_summary(score_table, scorer_name, stage, indices))
+            audit = selection_audit_row(
+                labels=labels,
+                rewards=rewards,
+                selected_indices=np.asarray(indices, dtype=np.int64),
+                candidate_indices=scorer_candidate,
+                real_mask=real_mask,
+                episode_ids=episode_ids,
+            )
+            audit_rows.append({"scorer": scorer_name, "stage": stage, **audit})
             for label, count in composition_by_label(labels, np.asarray(indices, dtype=np.int64)).items():
                 composition_rows.append({"scorer": scorer_name, "stage": stage, "label": label, "count": count})
 
@@ -264,7 +311,17 @@ def write_funnel_tables(
     baseline_rows = []
     for name, indices in baselines.items():
         baseline_rows.append(_stage_summary(score_table, "baseline", name, indices))
+        audit = selection_audit_row(
+            labels=labels,
+            rewards=rewards,
+            selected_indices=np.asarray(indices, dtype=np.int64),
+            candidate_indices=np.asarray(indices, dtype=np.int64),
+            real_mask=real_mask,
+            episode_ids=episode_ids,
+        )
+        audit_rows.append({"scorer": "baseline", "stage": name, **audit})
     pd.DataFrame(baseline_rows).to_csv(output_dir / "selection_funnel_by_baseline.csv", index=False)
+    pd.DataFrame(audit_rows).to_csv(output_dir / "metric_consistency_audit.csv", index=False)
 
     risk_rows = _risk_rows(score_table, selector_results, stress_results)
     pd.DataFrame(risk_rows).to_csv(output_dir / "risk_rejection_summary.csv", index=False)
