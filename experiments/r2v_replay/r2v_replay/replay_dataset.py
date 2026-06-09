@@ -9,7 +9,20 @@ import pandas as pd
 
 
 FEATURE_COLUMNS = {
+    "state_only": [
+        "state_x",
+        "state_y",
+        "next_state_x",
+        "next_state_y",
+    ],
     "obs_action_next": [
+        "state_x",
+        "state_y",
+        "action",
+        "next_state_x",
+        "next_state_y",
+    ],
+    "obs_action_next_done": [
         "state_x",
         "state_y",
         "action",

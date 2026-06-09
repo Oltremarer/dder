@@ -1,7 +1,7 @@
 import numpy as np
 
 from r2v_replay.encoders import TransitionEncoder
-from r2v_replay.rarity_scorers import KNNRarityScorer
+from r2v_replay.rarity_scorers import DiffusionConfig, DiffusionRarityScorer, KNNRarityScorer
 from r2v_replay.risk_scorers import OODRiskScorer
 from r2v_replay.utility_scorers import TaskUtilityScorer
 from r2v_replay.replay_dataset import ReplayDataset
@@ -52,3 +52,30 @@ def test_encoder_and_scorers_return_one_score_per_transition_without_labels():
     assert utility.total.shape == (len(dataset),)
     assert utility.components["progress"][0] > 0.0
     assert utility.components["reward"][2] > utility.components["reward"][0]
+
+
+def test_diffusion_rarity_cross_fit_returns_ranked_scores_and_noise_components():
+    dataset = _small_dataset()
+    z = TransitionEncoder(input_mode="obs_action_next").fit_transform(dataset)
+    scorer = DiffusionRarityScorer(
+        DiffusionConfig(
+            epochs=2,
+            hidden_dim=8,
+            batch_size=8,
+            eval_repeats=1,
+            folds=2,
+            noise_levels=(0.03, 0.20),
+            seed=7,
+        )
+    )
+
+    scores, components = scorer.cross_fit_score(z)
+
+    assert scores.shape == (len(dataset),)
+    assert np.all(np.isfinite(scores))
+    assert float(scores.min()) >= 0.0
+    assert float(scores.max()) <= 1.0
+    assert {"noise_0.03", "noise_0.20", "low_noise", "mid_noise", "high_noise", "mean_raw"}.issubset(
+        components
+    )
+    assert all(values.shape == (len(dataset),) for values in components.values())

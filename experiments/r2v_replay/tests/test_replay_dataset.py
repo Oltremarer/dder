@@ -29,5 +29,13 @@ def test_replay_dataset_round_trips_npz_and_keeps_labels_eval_only(tmp_path: Pat
     assert loaded.labels.tolist() == dataset.labels.tolist()
     assert "label_for_eval_only" in loaded.to_frame().columns
     assert "label_for_eval_only" not in loaded.feature_matrix("obs_action_next").columns
+    assert "done" not in loaded.feature_matrix("obs_action_next").columns
+    assert "done" in loaded.feature_matrix("obs_action_next_done").columns
+    assert loaded.feature_matrix("state_only").columns.tolist() == [
+        "state_x",
+        "state_y",
+        "next_state_x",
+        "next_state_y",
+    ]
     assert "reward" in loaded.feature_matrix("full_transition").columns
     assert "reward" not in loaded.feature_matrix("obs_action_next").columns

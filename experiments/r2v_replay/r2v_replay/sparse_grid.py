@@ -147,12 +147,19 @@ def _label_episode(records: list[dict[str, object]], cfg: SparseGridConfig) -> N
         elif success_index is not None and episode_return > 0.0 and 0 < (success_index - i) <= cfg.precursor_window:
             in_bottleneck = state in cfg.bottleneck_states or next_state in cfg.bottleneck_states
             label = "rare_valuable_zero_precursor" if progress >= 1.0 or in_bottleneck else "common_zero"
-        elif state in cfg.decoy_states or next_state in cfg.decoy_states:
+        elif _is_deep_decoy_transition(state, next_state, cfg):
             label = "rare_useless"
         else:
             label = "common_zero"
         row["label_for_eval_only"] = label
         row["return_to_go"] = episode_return
+
+
+def _is_deep_decoy_transition(state: State, next_state: State, cfg: SparseGridConfig) -> bool:
+    if not cfg.decoy_states:
+        return False
+    deep_decoy = max(cfg.decoy_states, key=lambda s: (s[0] + s[1], s[0], s[1]))
+    return state == deep_decoy or next_state == deep_decoy
 
 
 def _make_optional_invalid(dataset: ReplayDataset, ratio: float, seed: int) -> ReplayDataset:
@@ -213,9 +220,9 @@ def build_sparse_grid_replay(
     policy_mix = dict(
         policy_mix
         or {
-            "random_wander": 0.59,
+            "random_wander": 0.60,
             "noisy_goal": 0.23,
-            "decoy": 0.03,
+            "decoy": 0.02,
             "near_success": 0.15,
         }
     )

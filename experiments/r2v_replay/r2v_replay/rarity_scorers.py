@@ -37,6 +37,9 @@ class DiffusionConfig:
     hidden_dim: int = 64
     learning_rate: float = 1e-3
     eval_repeats: int = 4
+    folds: int = 3
+    noise_levels: tuple[float, ...] = (0.03, 0.05, 0.10, 0.20, 0.35)
+    time_embedding_dim: int = 8
     seed: int = 0
 
 
@@ -55,46 +58,119 @@ class DiffusionRarityScorer:
         self.dim_: int | None = None
 
     def fit(self, z: np.ndarray) -> "DiffusionRarityScorer":
-        rng = np.random.default_rng(self.config.seed)
         z_arr = np.asarray(z, dtype=np.float32)
+        if len(z_arr) == 0:
+            raise ValueError("cannot fit diffusion rarity scorer on an empty array")
         self.dim_ = int(z_arr.shape[1])
+        self.model_ = self._fit_model(z_arr, seed=self.config.seed)
+        return self
+
+    def score(self, z: np.ndarray) -> np.ndarray:
+        components = self.score_components(z)
+        return components["rank01_mean"]
+
+    def score_components(self, z: np.ndarray) -> dict[str, np.ndarray]:
+        if self.model_ is None or self.dim_ is None:
+            raise RuntimeError("DiffusionRarityScorer must be fit before score")
+        z_arr = np.asarray(z, dtype=np.float32)
+        components = self._score_components_with_model(self.model_, z_arr, seed=self.config.seed + 17)
+        return self._summarize_components(components)
+
+    def cross_fit_score(self, z: np.ndarray) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+        z_arr = np.asarray(z, dtype=np.float32)
+        if len(z_arr) == 0:
+            raise ValueError("cannot cross-fit diffusion rarity scorer on an empty array")
+        if len(z_arr) == 1:
+            self.fit(z_arr)
+            components = self.score_components(z_arr)
+            return components["rank01_mean"], components
+
+        folds = min(max(2, int(self.config.folds)), len(z_arr))
+        rng = np.random.default_rng(self.config.seed + 313)
+        shuffled = rng.permutation(len(z_arr))
+        holdout_folds = np.array_split(shuffled, folds)
+        component_values = {
+            _noise_key(sigma): np.zeros(len(z_arr), dtype=np.float32) for sigma in self._noise_levels()
+        }
+
+        all_indices = np.arange(len(z_arr))
+        for fold_id, holdout in enumerate(holdout_folds):
+            if len(holdout) == 0:
+                continue
+            train_mask = np.ones(len(z_arr), dtype=bool)
+            train_mask[holdout] = False
+            train_indices = all_indices[train_mask]
+            model = self._fit_model(z_arr[train_indices], seed=self.config.seed + fold_id)
+            fold_components = self._score_components_with_model(
+                model, z_arr[holdout], seed=self.config.seed + 1000 + fold_id
+            )
+            for name, values in fold_components.items():
+                component_values[name][holdout] = values
+
+        components = self._summarize_components(component_values)
+        return components["rank01_mean"], components
+
+    def _fit_model(self, z_arr: np.ndarray, seed: int) -> MLPRegressor:
+        rng = np.random.default_rng(seed)
+        noise_levels = self._noise_levels()
         noisy_inputs: list[np.ndarray] = []
         eps_targets: list[np.ndarray] = []
-        for _ in range(max(1, self.config.eval_repeats)):
-            t = rng.integers(0, self.config.steps, size=len(z_arr))
-            alpha = np.linspace(0.98, 0.02, self.config.steps, dtype=np.float32)[t][:, None]
-            eps = rng.normal(size=z_arr.shape).astype(np.float32)
-            noisy = np.sqrt(alpha) * z_arr + np.sqrt(1.0 - alpha) * eps
-            noisy_inputs.append(np.hstack([noisy, _time_embedding_np(t, self.config.steps, 8)]))
-            eps_targets.append(eps)
+        for _ in range(max(1, int(self.config.eval_repeats))):
+            for level_idx, sigma in enumerate(noise_levels):
+                eps = rng.normal(size=z_arr.shape).astype(np.float32)
+                noisy = z_arr + float(sigma) * eps
+                level = np.full(len(z_arr), level_idx, dtype=np.int64)
+                noisy_inputs.append(
+                    np.hstack([noisy, _time_embedding_np(level, len(noise_levels), self.config.time_embedding_dim)])
+                )
+                eps_targets.append(eps)
         x = np.vstack(noisy_inputs)
         y = np.vstack(eps_targets)
-        self.model_ = MLPRegressor(
+        model = MLPRegressor(
             hidden_layer_sizes=(self.config.hidden_dim, self.config.hidden_dim),
             activation="relu",
             learning_rate_init=self.config.learning_rate,
             max_iter=self.config.epochs,
-            random_state=self.config.seed,
+            random_state=seed,
             batch_size=min(self.config.batch_size, len(x)),
             early_stopping=False,
         )
-        self.model_.fit(x, y)
-        return self
+        model.fit(x, y)
+        return model
 
-    def score(self, z: np.ndarray) -> np.ndarray:
-        if self.model_ is None or self.dim_ is None:
-            raise RuntimeError("DiffusionRarityScorer must be fit before score")
-        rng = np.random.default_rng(self.config.seed + 17)
-        z_arr = np.asarray(z, dtype=np.float32)
-        scores = np.zeros(len(z_arr), dtype=np.float32)
-        for _ in range(max(1, self.config.eval_repeats)):
-            t = rng.integers(0, self.config.steps, size=len(z_arr))
-            alpha = np.linspace(0.98, 0.02, self.config.steps, dtype=np.float32)[t][:, None]
-            eps = rng.normal(size=z_arr.shape).astype(np.float32)
-            noisy = np.sqrt(alpha) * z_arr + np.sqrt(1.0 - alpha) * eps
-            pred = self.model_.predict(np.hstack([noisy, _time_embedding_np(t, self.config.steps, 8)]))
-            scores += ((pred - eps) ** 2).mean(axis=1).astype(np.float32)
-        return scores / max(1, self.config.eval_repeats)
+    def _score_components_with_model(self, model: MLPRegressor, z_arr: np.ndarray, seed: int) -> dict[str, np.ndarray]:
+        rng = np.random.default_rng(seed)
+        noise_levels = self._noise_levels()
+        components: dict[str, np.ndarray] = {}
+        for level_idx, sigma in enumerate(noise_levels):
+            scores = np.zeros(len(z_arr), dtype=np.float32)
+            level = np.full(len(z_arr), level_idx, dtype=np.int64)
+            emb = _time_embedding_np(level, len(noise_levels), self.config.time_embedding_dim)
+            for _ in range(max(1, int(self.config.eval_repeats))):
+                eps = rng.normal(size=z_arr.shape).astype(np.float32)
+                noisy = z_arr + float(sigma) * eps
+                pred = model.predict(np.hstack([noisy, emb]))
+                scores += ((pred - eps) ** 2).mean(axis=1).astype(np.float32)
+            components[_noise_key(float(sigma))] = scores / max(1, int(self.config.eval_repeats))
+        return components
+
+    def _summarize_components(self, components: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        summarized = {name: values.astype(np.float32) for name, values in components.items()}
+        noise_levels = self._noise_levels()
+        noise_columns = [summarized[_noise_key(sigma)] for sigma in noise_levels]
+        stacked = np.vstack(noise_columns)
+        summarized["low_noise"] = _masked_noise_mean(stacked, noise_levels <= 0.05)
+        summarized["mid_noise"] = _masked_noise_mean(stacked, (noise_levels > 0.05) & (noise_levels <= 0.20))
+        summarized["high_noise"] = _masked_noise_mean(stacked, noise_levels > 0.20)
+        summarized["mean_raw"] = stacked.mean(axis=0).astype(np.float32)
+        summarized["rank01_mean"] = _rank01(summarized["mean_raw"])
+        return summarized
+
+    def _noise_levels(self) -> np.ndarray:
+        levels = np.asarray(tuple(self.config.noise_levels), dtype=np.float32)
+        if len(levels) == 0:
+            raise ValueError("DiffusionConfig.noise_levels must not be empty")
+        return levels
 
 
 def _time_embedding_np(t_idx: np.ndarray, steps: int, dim: int) -> np.ndarray:
@@ -104,3 +180,23 @@ def _time_embedding_np(t_idx: np.ndarray, steps: int, dim: int) -> np.ndarray:
     if emb.shape[1] < dim:
         emb = np.concatenate([emb, t], axis=1)
     return emb[:, :dim].astype(np.float32)
+
+
+def _noise_key(sigma: float) -> str:
+    return f"noise_{sigma:.2f}"
+
+
+def _masked_noise_mean(stacked: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    if not bool(mask.any()):
+        return np.zeros(stacked.shape[1], dtype=np.float32)
+    return stacked[mask].mean(axis=0).astype(np.float32)
+
+
+def _rank01(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float32)
+    if len(values) == 1:
+        return np.ones_like(values, dtype=np.float32)
+    order = np.argsort(values)
+    ranks = np.empty_like(order, dtype=np.float32)
+    ranks[order] = np.linspace(0.0, 1.0, len(values), dtype=np.float32)
+    return ranks
