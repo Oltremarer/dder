@@ -38,7 +38,7 @@ class SparseGridConfig:
         height = 15
         walls = {(7, y) for y in range(height) if y != 7}
         walls.update({(x, 7) for x in range(width) if x not in {6, 7, 8}})
-        decoy_states = {(x, y) for x in range(0, 4) for y in range(4, 7)}
+        decoy_states = {(2, 6), (3, 5), (3, 6)}
         bottleneck_states = {(6, 7), (7, 7), (8, 7)}
         return cls(
             width=width,
